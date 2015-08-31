@@ -7,13 +7,9 @@ def getImages(Imagefile):
 	file = open(Imagefile, "r")
 	for line in file.readlines():
 		line = line.rstrip()
-		split1 = line.split('@')
-		split2 = split1[1].split(':')
-		user = split1[0]
-		ip = split2[0]
-		imageLocation = split2[1]
-		imageName = split2[1].split('/')[-1]
-		images.append((imageID, user, ip, imageLocation, imageName))
+		imageLocation = line
+		imageName = line.split('/')[-1]
+		images.append((imageID, imageLocation, imageName))
 		imageID += 1
 	return images
 

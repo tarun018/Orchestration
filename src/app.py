@@ -74,7 +74,6 @@ def createVM():
 	loc = imageTransfer(selected_physical_machine, imageDetails)
 	lht = int(db.vms.count())
 	VM_id = 38201 + lht
-	VMIDList.append(VM_id)
 	VM_name = name
 	VM_ram = int(instance_ram * 1000)
 	VM_cpu = instance_cpu
@@ -96,14 +95,13 @@ def createVM():
 		dom = connection.lookupByName(VM_name)
 		dom.create()
 		addVM(VM_id)
-		result = "{\n%s\n}" % str(VM_id)
+		#result = "{\n%s\n}" % str(VM_id)
 		#connection.close()
 		#return result
 		return jsonify({"vmid" : VM_id})
 	except:
 		print "Failed"
 		VMs.pop(str(VM_id))
-		VMIDList.remove(VM_id)
 		return jsonify(status=0)
 
 @app.route("/vm/query", methods=['GET'])
@@ -159,7 +157,7 @@ def listvms(pmquery=None):
 		if int(x['vms']['pm'][0]) == int(requestedID):
 			toprint.append(int(x['vms']['id']))
 	if pmquery == -8:
-		return len(toprint)
+		return toprint
 	return jsonify({"vmids" : toprint})
 
 @app.route("/pm/query", methods=['GET'])
@@ -194,7 +192,7 @@ def pmQuery():
 			toprint['free']['disk'] = 160
 			f.close()
 			os.system("rm -rf data")
-			toprint['vms'] = listvms(-8)
+			toprint['vms'] = len(listvms(-8))
 			return jsonify({"PMQuery" : toprint})
 	return jsonify(status=0)
 
@@ -255,9 +253,6 @@ def imageTransfer(physical_machine, imageDetails):
 	image_location = imageDetails[1]
 	image_name = imageDetails[2]
 
-	#if image_user == selected_machine_user and image_ip == selected_machine_ip:
-	#	return 1
-	#print "Sending file"
 	os.system("sudo scp " + image_location + " " + selected_machine_user + "@" + selected_machine_ip + ":/home/" + selected_machine_user)
 	return "/home/" + selected_machine_user + "/"
 
@@ -287,6 +282,5 @@ if __name__ == '__main__':
 	[ db.imagesdb.insert({'image':image}) for i,image in enumerate(images) ]
 	vmtypes = parse.getVmTypes(sys.argv[3])
 	VMs = {}
-	VMIDList = []
 	addVM()
 	app.run(debug=True)

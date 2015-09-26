@@ -6,7 +6,7 @@ def getXML(id, name, memory, cpu, source):
 	<currentMemory unit='KiB'>524</currentMemory>
 	<vcpu>%s</vcpu>
 	<os>
-		<type arch='x86_64' machine='pc-1.1'>hvm</type>
+		<type arch='i686' machine='pc-1.1'>hvm</type>
 		<boot dev='cdrom'/>
 		<boot dev='hd'/>
 	</os>

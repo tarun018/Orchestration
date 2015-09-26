@@ -1,15 +1,166 @@
 from flask import Flask, jsonify, make_response, request
-import parse, xml
+import parse, xml, attach
 import os
 import sys
 import libvirt
+import rados
+import subprocess
+import rbd
+from random import choice
+
 app = Flask(__name__)
 
 VM_id = 38200
+VOL_id = 157
+CONF_FILE = "/etc/ceph/ceph.conf"
+POOL = 'test'
+HOST = 'tg'
+BLOCK_XML = ""
+VOL_Names = []
 
 @app.route("/")
 def hello():
 	return "Hello All. Welcome to the world of Virtualization!"
+
+@app.route("/volume/create",methods=['GET'])
+def createVolume():
+	arguments = request.args
+	name = str(arguments['name'])
+	size = int(arguments['size'])
+	global VOL_Names
+	if name in VOL_Names:
+		return jsonify(volumeid=0)
+	size = (1024**3) * size
+	global rbdInstance
+	global ioctx
+	try:
+		rbdInstance.create(ioctx, name, size)
+		os.system('sudo rbd map %s --pool %s --name client.admin'%(name,POOL))
+	except:
+		jsonify(volumeid=0)
+	volDetails = {}
+	volumeID = VOL_id + int(db.vols.count())
+	volDetails[str(volumeID)] = {}
+	volDetails[str(volumeID)]['name'] = name
+	volDetails[str(volumeID)]['size'] = size
+	volDetails[str(volumeID)]['status'] = "available"
+	volDetails[str(volumeID)]['VMid'] = None
+	volDetails[str(volumeID)]['dev_name'] = getDeviceName()
+	db.vols.insert({'idto' : volumeID, 'vol' : volDetails[str(volumeID)]})
+	return jsonify(volumeid=volumeID)
+
+@app.route("/volume/query",methods=['GET'])
+def queryVolume():
+	arguments = request.args
+	volumeIDtoquery = int(arguments['volumeid'])
+	for x in list(db.vols.find()):
+		if int(x['idto']) == volumeIDtoquery:
+			volInfo = x['vol']
+			presentStatus = volInfo['status']
+			if presentStatus == "available":
+				return jsonify(volumeid = volumeIDtoquery,
+							   name = volInfo['name'],
+							   size = (int(volInfo['size'])/(1024**3)),
+							   status = volInfo['status'])
+			elif presentStatus == "attached":
+				return jsonify(volumeid = volumeIDtoquery,
+							   name = volInfo['name'],
+							   size = (int(volInfo['size'])/(1024**3)),
+							   status = volInfo['status'],
+							   vmid = volInfo['VMid'])
+	return jsonify(error = "volumeid : %s does not exist"%(volumeIDtoquery))	
+
+@app.route("/volume/destroy",methods=['GET'])
+def destroyVolume():
+	arguments = request.args
+	volumeIDtoDelete = int(arguments['vmid'])
+	for x in list(db.vols.find()):
+		if int(x['idto']) == volumeIDtoDelete and str(x['vol']['status']) == "available":
+			try:
+				imageName = str(x['vol']['name'])
+				os.system('sudo rbd unmap /dev/rbd/%s/%s'%(POOL,imageName))
+				rbdInstance.remove(ioctx,imageName)
+				db.vols.remove({'idto' : volumeIDtoDelete})
+				return jsonify(status=1)
+			except:
+				return jsonify(status=0)
+	return jsonify(status=0)
+
+@app.route("/volume/attach", methods=['GET'])
+def attachVolume():
+	arguments = request.args
+	vmid = int(arguments['vmid'])
+	volid = int(arguments['volumeid'])
+	if isVolValid(volid) == False:
+		return jsonify(status=0)
+	if isVMValid(vmid) == False:
+		return jsonify(status=0)
+	vminfo = {}
+	volinfo = {}
+	for x in list(db.vms.find()):
+		if int(x['idto']) == vmid:
+			vminfo = x['vms']
+	for x in list(db.vols.find()):
+		if int(x['idto']) == volid:
+			volinfo = x['vol']
+	selected_machine_user = vminfo['pm'][2]
+	selected_machine_ip = vminfo['pm'][3]
+	VM_name = vminfo['name']
+	Image_name = volinfo['name']
+	dev = volinfo['dev_name']
+
+	connection = libvirt.open("qemu+ssh://" + selected_machine_user + "@" + selected_machine_ip + "/system")
+	dom = connection.lookupByName(VM_name)
+	confXML = attach.getXML(str(Image_name), str(HOST), str(POOL), str(dev))
+	try:
+		dom.attachDevice(confXML)
+		volinfo['VMid'] = vmid
+		volinfo['status'] = "attached"
+		db.vols.remove({'idto' : volid})
+		db.vols.insert({'idto' : volid , 'vol' : volinfo})
+		connection.close()
+		return jsonify(status=1)
+	except:
+		connection.close()
+		return jsonify(status=0)
+
+@app.route("/volume/detach", methods=['GET'])
+def detachVolume():
+	arguments = request.args
+	volid = int(arguments['volumeid'])
+	if isVolValid(volid) == False:
+		return jsonify(status=0)
+	volinfo = {}
+	for x in list(db.vols.find()):
+		if int(x['idto']) == volid:
+			volinfo = x['vol']
+	if volinfo['status'] != "attached":
+		return jsonify(status=0)
+	vmid = volinfo['VMid']
+	vminfo = {}
+	for x in list(db.vms.find()):
+		if int(x['idto']) == vmid:
+			vminfo = x['vms']
+	selected_machine_user = vminfo['pm'][2]
+	selected_machine_ip = vminfo['pm'][3]
+	VM_name = vminfo['name']
+	Image_name = volinfo['name']
+	dev = volinfo['dev_name']
+
+	connection = libvirt.open("qemu+ssh://" + selected_machine_user + "@" + selected_machine_ip + "/system")
+	dom = connection.lookupByName(VM_name)
+	confXML = attach.getXML(str(Image_name), str(HOST), str(POOL), str(dev))
+	try:
+		dom.detachDevice(confXML)
+		connection.close()
+		volinfo['VMid'] = None
+		volinfo['status'] = "available"
+		db.vols.remove({'idto' : volid})
+		db.vols.insert({'idto' : volid , 'vol' : volinfo})
+		return jsonify(status=1)
+	except:
+		connection.close()
+		return jsonify(status=0)
 
 @app.route("/pm/list/")
 def listMachines():
@@ -196,7 +347,12 @@ def pmQuery():
 			return jsonify({"PMQuery" : toprint})
 	return jsonify(status=0)
 
-			
+def isVolValid(Volid):
+	for x in list(db.vols.find()):
+		if int(x['idto']) == int(Volid):
+			return True
+	return False
+
 def isVMValid(VMid):
 	for x in list(db.vms.find()):
 		if int(x['idto']) == int(VMid):
@@ -269,6 +425,28 @@ def get_db():
 	db = client.myFirstMB
 	return db
 
+def establish_connection():
+	cluster = rados.Rados(conffile=CONF_FILE)
+	cluster.connect()
+	if POOL not in cluster.list_pools():
+		cluster.create_pool(POOL)
+	global ioctx
+	ioctx = cluster.open_ioctx(POOL)
+	global rbdInstance
+	rbdInstance = rbd.RBD()
+
+def getDeviceName():
+	alpha = choice('efghijklmnopqrstuvwxyz')
+	numeric = choice([x for x in range(1,10)])
+	return 'sd' + str(alpha) + str(numeric)
+
+def getHostName():
+	global HOST
+	monProc = subprocess.Popen("ceph mon_status", shell=True, bufsize=0, stdout=subprocess.PIPE, universal_newlines=True)
+	monDict = eval(monProc.stdout.read())
+	HOST = monDict['monmap']['mons'][0]['name']
+	#print HOST
+
 if __name__ == '__main__':
 	if len(sys.argv) < 4:
 		print "Usage: python app.py Machines Images VM_Types"
@@ -283,4 +461,6 @@ if __name__ == '__main__':
 	vmtypes = parse.getVmTypes(sys.argv[3])
 	VMs = {}
 	addVM()
+	establish_connection()
+	getHostName()
 	app.run(debug=True)

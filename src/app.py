@@ -328,19 +328,25 @@ def pmQuery():
 			machine_ip = machine[3]
 			os.system("ssh " + machine_user + "@" + machine_ip + " nproc >> data")
 			os.system("ssh " + machine_user + "@" + machine_ip + " free -m | grep 'Mem:' | awk '{print $2}' >> data")
+			os.system("ssh " + machine_user + "@" + machine_ip + " ceph df | awk '{print $1}' | head -3 | tail -1 >> data")
 			os.system("ssh " + machine_user + "@" + machine_ip + " free -m | grep 'Mem:' | awk '{print $4}' >> data")
+			os.system("ssh " + machine_user + "@" + machine_ip + " ceph df | awk '{print $2}' | head -3 | tail -1 >> data")
 			f = open("data", "r")
 			cpu = f.readline().rstrip()
 			mem = f.readline().rstrip()
+			capa = f.readline().rstrip()
+			capa = float(int(capa.split("M")[0])/1024)
 			toprint['capacity'] = {}
 			toprint['capacity']['cpu'] = cpu
-			toprint['capacity']['ram'] = mem
-			toprint['capacity']['disk'] = 160
+			toprint['capacity']['ram'] = mem+"M"
+			toprint['capacity']['disk'] = str(capa)+"G"
 			free = f.readline().rstrip()
+			rem_capa = f.readline().rstrip()
+			rem_capa = float(int(rem_capa.split("M")[0])/1024)
 			toprint['free'] = {}
 			toprint['free']['cpu'] = cpu
-			toprint['free']['ram'] = free
-			toprint['free']['disk'] = 160
+			toprint['free']['ram'] = free+"M"
+			toprint['free']['disk'] = str(rem_capa)+"G"
 			f.close()
 			os.system("rm -rf data")
 			toprint['vms'] = len(listvms(-8))
@@ -426,6 +432,7 @@ def get_db():
 	return db
 
 def establish_connection():
+	global cluster
 	cluster = rados.Rados(conffile=CONF_FILE)
 	cluster.connect()
 	if POOL not in cluster.list_pools():
@@ -447,6 +454,12 @@ def getHostName():
 	HOST = monDict['monmap']['mons'][0]['name']
 	#print HOST
 
+def cleanup():
+	global cluster, ioctx
+	cluster.delete_pool(POOL)
+	ioctx.close()
+	cluster.shutdown()
+
 if __name__ == '__main__':
 	if len(sys.argv) < 4:
 		print "Usage: python app.py Machines Images VM_Types"
@@ -464,3 +477,4 @@ if __name__ == '__main__':
 	establish_connection()
 	getHostName()
 	app.run(debug=True)
+	cleanup()
